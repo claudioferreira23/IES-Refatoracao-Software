@@ -31,10 +31,15 @@ class SubscriptionBillingServiceTest {
     private static final Clock MARCH_CLOCK = Clock.fixed(Instant.parse("2026-03-15T12:00:00Z"), SAO_PAULO);
     private static final Clock NOVEMBER_CLOCK = Clock.fixed(Instant.parse("2026-11-27T12:00:00Z"), SAO_PAULO);
 
+    private static final String ACTIVE_CUSTOMER_ID = "cus_1";
+    private static final String INACTIVE_CUSTOMER_ID = "cus_2";
+    private static final String ACTIVE_CUSTOMER_EMAIL = "cliente@exemplo.com";
+    private static final Money MONTHLY_PRICE = Money.of("100.00");
+
     private static final Customer ACTIVE_CUSTOMER =
-            new Customer("cus_1", "cliente@exemplo.com", CustomerStatus.ACTIVE);
+            new Customer(ACTIVE_CUSTOMER_ID, ACTIVE_CUSTOMER_EMAIL, CustomerStatus.ACTIVE);
     private static final Customer INACTIVE_CUSTOMER =
-            new Customer("cus_2", "inativo@exemplo.com", CustomerStatus.INACTIVE);
+            new Customer(INACTIVE_CUSTOMER_ID, "inativo@exemplo.com", CustomerStatus.INACTIVE);
 
     private final InMemoryCustomerRepository customers =
             new InMemoryCustomerRepository().with(ACTIVE_CUSTOMER).with(INACTIVE_CUSTOMER);
@@ -45,25 +50,25 @@ class SubscriptionBillingServiceTest {
     void chargesActiveCustomerRecordsPaidInvoiceAndSendsReceipt() {
         RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
 
-        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command("cus_1", null));
+        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command(ACTIVE_CUSTOMER_ID, null));
 
         assertEquals(List.of(
                 "Pagamento processado com sucesso: R$ 100.00",
                 "E-mail disparado para: cliente@exemplo.com"), logs);
-        assertEquals(List.of(Money.of("100.00")), gateway.charges());
-        assertEquals(List.of(new Invoice("cus_1", Money.of("100.00"), InvoiceStatus.PAID)), invoices.invoices());
-        assertEquals(List.of(new SentReceipt("cliente@exemplo.com", Money.of("100.00"))), notifications.sent());
+        assertEquals(List.of(MONTHLY_PRICE), gateway.charges());
+        assertEquals(List.of(new Invoice(ACTIVE_CUSTOMER_ID, MONTHLY_PRICE, InvoiceStatus.PAID)), invoices.invoices());
+        assertEquals(List.of(new SentReceipt(ACTIVE_CUSTOMER_EMAIL, MONTHLY_PRICE)), notifications.sent());
     }
 
     @Test
     void recordsFailedInvoiceAndStillSendsReceiptWhenPaymentIsDeclined() {
         List<String> logs = service(RecordingPaymentGateway.declining(), MARCH_CLOCK)
-                .processMonthlyBilling(command("cus_1", null));
+                .processMonthlyBilling(command(ACTIVE_CUSTOMER_ID, null));
 
         assertEquals(List.of(
                 "Falha no pagamento do cartão para: cus_1",
                 "E-mail disparado para: cliente@exemplo.com"), logs);
-        assertEquals(List.of(new Invoice("cus_1", Money.of("100.00"), InvoiceStatus.FAILED)), invoices.invoices());
+        assertEquals(List.of(new Invoice(ACTIVE_CUSTOMER_ID, MONTHLY_PRICE, InvoiceStatus.FAILED)), invoices.invoices());
         assertEquals(1, notifications.sent().size());
     }
 
@@ -71,7 +76,7 @@ class SubscriptionBillingServiceTest {
     void cancelsBillingForInactiveCustomer() {
         RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
 
-        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command("cus_2", null));
+        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command(INACTIVE_CUSTOMER_ID, null));
 
         assertEquals(List.of("Cliente inativo. Cobrança cancelada: cus_2"), logs);
         assertTrue(gateway.charges().isEmpty());
@@ -95,10 +100,10 @@ class SubscriptionBillingServiceTest {
     void usesInjectedClockToDecideDateSensitiveRules() {
         RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
 
-        service(gateway, NOVEMBER_CLOCK).processMonthlyBilling(command("cus_1", "BLACKFRIDAY"));
-        service(gateway, MARCH_CLOCK).processMonthlyBilling(command("cus_1", "BLACKFRIDAY"));
+        service(gateway, NOVEMBER_CLOCK).processMonthlyBilling(command(ACTIVE_CUSTOMER_ID, "BLACKFRIDAY"));
+        service(gateway, MARCH_CLOCK).processMonthlyBilling(command(ACTIVE_CUSTOMER_ID, "BLACKFRIDAY"));
 
-        assertEquals(List.of(Money.of("70.00"), Money.of("100.00")), gateway.charges());
+        assertEquals(List.of(Money.of("70.00"), MONTHLY_PRICE), gateway.charges());
     }
 
     @Test
@@ -110,11 +115,45 @@ class SubscriptionBillingServiceTest {
                 },
                 invoices, RecordingPaymentGateway.approving(), notifications, new PricingCalculator(), MARCH_CLOCK);
 
+        BillingCommand billingCommand = command(ACTIVE_CUSTOMER_ID, null);
+
         InfrastructureException thrown =
-                assertThrows(InfrastructureException.class, () -> service.processMonthlyBilling(command("cus_1", null)));
+                assertThrows(InfrastructureException.class, () -> service.processMonthlyBilling(billingCommand));
 
         assertSame(failure, thrown);
         assertTrue(invoices.invoices().isEmpty());
+    }
+
+    @Test
+    void keepsPaidInvoiceAndLogsWhenReceiptCannotBeSent() {
+        notifications.failOnSend(new InfrastructureException("smtp fora do ar", new RuntimeException()));
+        RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
+
+        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command(ACTIVE_CUSTOMER_ID, null));
+
+        assertEquals(List.of(
+                "Pagamento processado com sucesso: R$ 100.00",
+                "Falha ao enviar recibo para: cliente@exemplo.com"), logs);
+        assertEquals(List.of(MONTHLY_PRICE), gateway.charges());
+        assertEquals(List.of(new Invoice(ACTIVE_CUSTOMER_ID, MONTHLY_PRICE, InvoiceStatus.PAID)), invoices.invoices());
+        assertTrue(notifications.sent().isEmpty());
+    }
+
+    @Test
+    void propagatesInvoiceStorageFailureAfterCharging() {
+        InfrastructureException failure = new InfrastructureException("falha ao gravar fatura", new RuntimeException());
+        invoices.failOnSave(failure);
+        RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
+        SubscriptionBillingService service = service(gateway, MARCH_CLOCK);
+
+        BillingCommand billingCommand = command(ACTIVE_CUSTOMER_ID, null);
+
+        InfrastructureException thrown =
+                assertThrows(InfrastructureException.class, () -> service.processMonthlyBilling(billingCommand));
+
+        assertSame(failure, thrown);
+        assertEquals(List.of(MONTHLY_PRICE), gateway.charges());
+        assertTrue(notifications.sent().isEmpty());
     }
 
     private SubscriptionBillingService service(RecordingPaymentGateway gateway, Clock clock) {
@@ -123,6 +162,6 @@ class SubscriptionBillingServiceTest {
 
     private static BillingCommand command(String customerId, String promoCode) {
         return new BillingCommand(
-                customerId, Money.of("100.00"), LocalDate.of(2026, 1, 10), 0, promoCode, false, "tok_visa");
+                customerId, MONTHLY_PRICE, LocalDate.of(2026, 1, 10), 0, promoCode, false, "tok_visa");
     }
 }
