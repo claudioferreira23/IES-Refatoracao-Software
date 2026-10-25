@@ -40,7 +40,7 @@ As linhas citadas abaixo se referem ao arquivo legado original (commit `ead36d4`
 | Extract Class / Move Method | SQL → `JdbcCustomerRepository` e `JdbcInvoiceRepository`; e-mail → `SmtpNotificationService`; validação do token → `TokenValidatingPaymentGateway` | *Refactor › Extract › Delegate* / *Move* (F6) |
 | Introduce Parameter (injeção de dependência) | `java.time.Clock` e portas recebidas pelo construtor | *Introduce Parameter* (Ctrl+Alt+P) / *Introduce Field* (Ctrl+Alt+F) |
 | Extract Class | Regras de preço → `PricingCalculator` (domínio puro, sem I/O) | *Refactor › Extract › Delegate* |
-| Extract Method | `applyLoyaltyDiscount`, `applyNonProfitDiscount`, `applyPromoCode`, `applyLateCharges`, `monthsBetween`, `bill` | *Extract Method* (Ctrl+Alt+M) |
+| Extract Method | `applyLoyaltyDiscount`, `applyNonProfitDiscount`, `applyPromoCode`, `applyLateCharges`, `monthsBetween`, `bill`, `sendReceipt` | *Extract Method* (Ctrl+Alt+M) |
 | Replace Magic Number with Symbolic Constant | Todas as taxas, limites e códigos promocionais | *Introduce Constant* (Ctrl+Alt+C) |
 | Replace Nested Conditional with Guard Clauses | Cliente inativo e cliente inexistente no orquestrador | *Invert 'if'* (Alt+Enter) |
 | Remove Dead Code | `// emailSender.send();`, `planType` e o teste `trim().isEmpty()`, que não alterava o resultado | *Safe Delete* (Alt+Delete) |
@@ -63,11 +63,13 @@ com.saas.billing
     └── TokenValidatingPaymentGateway
 ```
 
-O serviço depende apenas das interfaces em `port/`, e os testes injetam implementações em memória (`src/test/java/.../support`) e um `Clock.fixed(...)`. Os adaptadores capturam apenas a exceção específica da tecnologia (`SQLException`, `EmailException`) e a relançam como `InfrastructureException`, preservando a causa. Assim a falha chega ao chamador em vez de ser silenciada.
+O serviço depende apenas das interfaces em `port/`, e os testes injetam implementações em memória (`src/test/java/.../support`) e um `Clock.fixed(...)`. Os adaptadores capturam apenas a exceção específica da tecnologia (`SQLException`, `EmailException`) e a relançam como `InfrastructureException`, preservando a causa. Assim a falha chega ao chamador em vez de ser silenciada. A única exceção capturada no serviço é a `InfrastructureException` do envio do recibo, tratada em `sendReceipt` (ver seção 4).
+
+A `BillingServiceFactory` exige `BILLING_DB_URL` e `BILLING_DB_USER` e falha com `IllegalStateException` se alguma estiver ausente. Não há mais URL nem usuário de banco com valor padrão no código.
 
 ## 3. Métricas antes vs. depois
 
-A complexidade ciclomática (CCN), o NLOC e a contagem de parâmetros foram medidos com a ferramenta [lizard](https://github.com/terryyin/lizard) sobre o código de produção. As demais linhas foram contadas diretamente no código.
+A complexidade ciclomática (CCN), o NLOC e a contagem de parâmetros foram medidos com a ferramenta [lizard](https://github.com/terryyin/lizard) sobre o código de produção. As demais linhas foram contadas diretamente no código. A cobertura foi medida com o JaCoCo (`mvn verify`, relatório em `target/site/jacoco`).
 
 | Métrica | Antes | Depois |
 |---|---|---|
@@ -75,7 +77,7 @@ A complexidade ciclomática (CCN), o NLOC e a contagem de parâmetros foram medi
 | NLOC do método principal | 70 | 7 |
 | Complexidade ciclomática do método principal | 18 | 1 |
 | Maior complexidade ciclomática do projeto | 18 | 5 (`PricingCalculator.applyPromoCode`) |
-| Complexidade ciclomática média por método | 18 | 1,7 |
+| Complexidade ciclomática média por método | 18 | 1,7 (medida antes das correções pós-auditoria, que acrescentaram `sendReceipt`, com CCN 2) |
 | Parâmetros do método principal | 8 | 1 (`BillingCommand`) |
 | Tipos de produção (classes, records, enums, interfaces) | 1 | 18 |
 | Imports de I/O (`java.sql.*`, `commons-mail`) no serviço | 5 | 0 |
@@ -83,21 +85,41 @@ A complexidade ciclomática (CCN), o NLOC e a contagem de parâmetros foram medi
 | Literais mágicos nas regras de preço | 11 | 0 |
 | Chamadas a `LocalDate.now()` sem relógio injetado | 1 | 0 |
 | Blocos `catch (Exception e)` | 1 | 0 |
-| Credenciais hardcoded | 3 | 0 |
+| Credenciais e endereço do banco hardcoded (URL, usuário, senha) | 3 | 0 |
 | Recursos JDBC sem fechamento garantido | 3 | 0 |
-| Testes unitários automatizados | 0 | 29 |
+| Testes unitários automatizados (execuções, contando cada caso parametrizado) | 0 | 52 |
+| Cobertura de linhas (JaCoCo), projeto inteiro | n/a | 74,2% (118/159) |
+| Cobertura de linhas (JaCoCo), domínio, serviço e portas | n/a | 100% (98/98) |
+| Cobertura de ramos (JaCoCo), projeto inteiro | n/a | 88,6% (39/44) |
+| Cobertura de ramos (JaCoCo), domínio, serviço e portas | n/a | 100% (30/30) |
+| Divergências de valor em relação ao legado (102.960 combinações) | n/a | 274, todas empates `x,xx5` |
+| Divergências de status da fatura em relação ao legado | n/a | 0 |
 | Infraestrutura externa exigida pelos testes | PostgreSQL + SMTP | nenhuma |
 
-A suíte tem três classes. `MoneyTest` cobre o arredondamento, a imutabilidade e as operações. `PricingCalculatorTest` cobre cada regra isoladamente e inclui um teste de caracterização que compara o novo cálculo com a fórmula legada em 3.840 combinações de preço, tempo de casa, cupom, atraso, ONG e mês. A diferença máxima observada ficou dentro de 1 centavo, que é o efeito do arredondamento introduzido pelo `Money`. `SubscriptionBillingServiceTest` cobre o fluxo completo com dublês em memória: pagamento aprovado, recusado, cliente inativo, cliente inexistente, dependência do relógio injetado e propagação de falha de infraestrutura.
+A suíte tem sete classes:
+
+- `MoneyTest` cobre o arredondamento, a imutabilidade e as operações.
+- `PricingCalculatorTest` cobre cada regra isoladamente, com os casos de cada regra em testes parametrizados (`@ParameterizedTest` com `@CsvSource`), e inclui um teste de caracterização que compara o novo cálculo com a fórmula legada em 3.840 combinações de preço, tempo de casa, cupom, atraso, ONG e mês. O valor novo precisa ser igual ao resultado legado arredondado a centavos. Só se aceita diferença de 1 centavo quando o valor legado cai exatamente na metade de um centavo (empate `x,xx5`). Há também um caso de regressão fixo: base 19,90, 25 meses e 365 dias de atraso, cujo valor legado de 23,427275 deve resultar em 23,43.
+- `CustomerStatusTest` cobre o status lido do banco sem diferenciar maiúsculas de minúsculas, com `null` e valores desconhecidos tratados como inativos.
+- `TokenValidatingPaymentGatewayTest` cobre a regra do prefixo `tok_`.
+- `SmtpNotificationServiceTest` cobre a rejeição de e-mail nulo, vazio ou em branco antes de qualquer tentativa de envio, sem servidor SMTP.
+- `JdbcCustomerRepositoryTest` usa um `DataSource` falso (`java.lang.reflect.Proxy`, sem banco) para testar o mapeamento, o cliente inexistente, o fechamento de `ResultSet`, `PreparedStatement` e `Connection` e a tradução de `SQLException`.
+- `SubscriptionBillingServiceTest` cobre o fluxo completo com dublês em memória: pagamento aprovado e recusado, cliente inativo e inexistente, relógio injetado, propagação de falha do repositório de clientes e de gravação da fatura e falha no envio do recibo.
+
+Além da suíte, comparamos o legado (executado com um driver JDBC falso e relógio fixo) com o código refatorado em 102.960 combinações. O status da fatura nunca diverge. O valor diverge em 274 casos (0,27%), sempre em 1 centavo e sempre em empates `x,xx5`. A seção 4 explica a política de arredondamento. O `JdbcInvoiceRepository` e a `BillingServiceFactory` não têm testes, e o `SmtpNotificationService` só tem teste da validação do e-mail, porque o envio real exige um servidor SMTP. Por isso a cobertura do projeto inteiro é menor que a do domínio.
 
 ## 4. Diferenças de comportamento observáveis
 
-As regras de negócio (descontos por tempo de casa, ONG, cupons, multa, juros e piso zero) foram preservadas, e o teste de caracterização garante isso. Quatro diferenças são intencionais e decorrem diretamente dos objetivos da refatoração:
+As regras de negócio (descontos por tempo de casa, ONG, cupons, multa, juros e piso zero) foram preservadas, e o teste de caracterização garante isso. As diferenças abaixo são intencionais e decorrem dos objetivos da refatoração:
 
-1. **Valores em centavos.** O valor agora sai sempre com duas casas (`R$ 85.00`), em vez da representação crua do `double` (`R$ 85.0`, `R$ 84.99999999`).
+1. **Valores em centavos e política de arredondamento.** O `PricingCalculator` faz todas as etapas em `BigDecimal` sem arredondar e arredonda uma única vez, no valor final, para 2 casas com `RoundingMode.HALF_EVEN`. Uma primeira versão arredondava cada operação intermediária (desconto, multa e juros), e o total divergia do legado em 1 centavo em cerca de 13,5% das combinações. Com o arredondamento único, o resultado coincide com o valor legado arredondado, exceto nos empates `x,xx5`. Nesses casos o legado nunca definiu um arredondamento: ele gravava o `double` cru, e esse `double` muitas vezes carrega ruído binário logo acima ou abaixo da metade do centavo. Escolhemos `HALF_EVEN` (arredondamento bancário) porque ele não tem viés sistemático para cima em grandes volumes de faturas. Trocar para `HALF_UP` exige mudar só a constante em `Money`. Os logs e o e-mail passam a exibir o valor com duas casas (`R$ 100.00`), e não a representação crua do `double` (`R$ 100.0`, `R$ 84.99999999`).
 2. **Falhas de infraestrutura propagam.** Antes, um erro de banco virava a linha de log `Erro fatal no processamento: ...`. Agora o método lança `InfrastructureException` com a causa original, e cabe ao chamador decidir como tratar.
 3. **O recibo é enviado de fato.** No legado, `send()` estava comentado e o log mentia. O `SmtpNotificationService` realmente envia o e-mail.
-4. **Configuração externa.** URL, usuário e senha do banco e os dados do SMTP vêm das variáveis de ambiente `BILLING_DB_URL`, `BILLING_DB_USER`, `BILLING_DB_PASSWORD`, `BILLING_SMTP_HOST`, `BILLING_SMTP_PORT` e `BILLING_SMTP_FROM`. A senha deixou de ter valor padrão no código.
+4. **Falha depois da cobrança.** Como o e-mail agora é enviado, uma falha de SMTP poderia lançar exceção depois de o cartão já ter sido cobrado e a fatura gravada, e o chamador que tentasse de novo cobraria o cliente duas vezes. Por isso o recibo é tratado como não crítico: uma `InfrastructureException` no envio vira o log `Falha ao enviar recibo para: <e-mail>`, e a fatura continua registrada. Já uma falha ao gravar a fatura propaga a exceção, porque cobrar sem registrar é mais grave e precisa chegar ao chamador.
+5. **E-mail nulo ou vazio no cadastro.** No legado, um cliente sem e-mail era cobrado, tinha a fatura gravada e gerava o log `Erro fatal no processamento: ...`, porque o `addTo(null)` do `commons-email` lança `NullPointerException`. Agora o `SmtpNotificationService` valida o e-mail antes de montar a mensagem e lança `InfrastructureException` quando ele é nulo, vazio ou em branco. Essa exceção é tratada como as demais falhas de recibo: a cobrança e a fatura `PAID` são mantidas, `processMonthlyBilling` não lança exceção e o log registra `Falha ao enviar recibo para: <e-mail>`.
+6. **Configuração externa.** URL, usuário e senha do banco e os dados do SMTP vêm das variáveis de ambiente `BILLING_DB_URL`, `BILLING_DB_USER`, `BILLING_DB_PASSWORD`, `BILLING_SMTP_HOST`, `BILLING_SMTP_PORT` e `BILLING_SMTP_FROM`. URL e usuário do banco são obrigatórios e a senha não tem valor padrão no código.
+
+**Limitação do processo:** o teste de caracterização que compara o cálculo com a fórmula legada só entrou no commit 4. Os commits 2 e 3 alteraram a aritmética e o fluxo sem essa rede de segurança. A divergência de arredondamento por etapa foi identificada depois, na auditoria, e corrigida na correção pós-auditoria descrita na seção 5.
 
 ## 5. Histórico no Git
 
@@ -110,12 +132,24 @@ As regras de negócio (descontos por tempo de casa, ONG, cupons, multa, juros e 
 
 Cada commit compila e mantém os testes existentes passando.
 
+### Correções pós-auditoria
+
+| Branch | Conteúdo |
+|---|---|
+| `fix/arredondamento-resultado-final` | Arredondamento único no resultado final do `PricingCalculator`; teste de caracterização restrito a empates e caso de regressão 19,90/25 meses/365 dias |
+| `test/cobertura-regras-legado` | Testes da regra `tok_`, do `CustomerStatus.fromCode` e do `JdbcCustomerRepository` |
+| `fix/falha-pos-cobranca` | Recibo tratado como não crítico depois da cobrança; testes de falha do envio e da gravação da fatura |
+| `ci/github-actions-jacoco` | Workflow do GitHub Actions (`mvn -B verify`) e JaCoCo no `pom.xml` |
+| `chore/corrigir-issues-sonar` e commits de ajuste nas branches de teste | Correção de issues do SonarQube nos testes (literais duplicados, complexidade cognitiva, `assertThrows` com mais de uma chamada) e parametrização dos casos do `PricingCalculatorTest` |
+| `fix/email-recibo-invalido` | Validação de e-mail nulo ou vazio no `SmtpNotificationService` antes do envio, com teste |
+| `docs/readme-relatorio-final` | Factory sem valores padrão para o banco, README e este relatório atualizados |
+
 ## 6. Como executar
 
-Requer JDK 17+ e Maven:
+Requer JDK 17+ e Maven 3.8+. Os comandos, a estrutura do projeto e as variáveis de ambiente estão no [README](README.md).
 
 ```bash
-mvn test
+mvn verify
 ```
 
 Os testes não precisam de banco de dados nem de servidor de e-mail.
