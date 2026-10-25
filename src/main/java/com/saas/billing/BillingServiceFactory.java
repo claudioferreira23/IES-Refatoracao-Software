@@ -1,0 +1,41 @@
+package com.saas.billing;
+
+import com.saas.billing.adapter.JdbcCustomerRepository;
+import com.saas.billing.adapter.JdbcInvoiceRepository;
+import com.saas.billing.adapter.SmtpNotificationService;
+import com.saas.billing.adapter.TokenValidatingPaymentGateway;
+import java.time.Clock;
+import java.util.Optional;
+import javax.sql.DataSource;
+import org.postgresql.ds.PGSimpleDataSource;
+
+public final class BillingServiceFactory {
+
+    private BillingServiceFactory() {
+    }
+
+    public static SubscriptionBillingService createDefault() {
+        DataSource dataSource = postgresDataSource();
+        return new SubscriptionBillingService(
+                new JdbcCustomerRepository(dataSource),
+                new JdbcInvoiceRepository(dataSource),
+                new TokenValidatingPaymentGateway(),
+                new SmtpNotificationService(
+                        env("BILLING_SMTP_HOST", "smtp.empresa.com"),
+                        Integer.parseInt(env("BILLING_SMTP_PORT", "587")),
+                        env("BILLING_SMTP_FROM", "billing@empresa.com")),
+                Clock.systemDefaultZone());
+    }
+
+    private static DataSource postgresDataSource() {
+        PGSimpleDataSource dataSource = new PGSimpleDataSource();
+        dataSource.setUrl(env("BILLING_DB_URL", "jdbc:postgresql://localhost:5432/saas_db"));
+        dataSource.setUser(env("BILLING_DB_USER", "admin"));
+        dataSource.setPassword(env("BILLING_DB_PASSWORD", ""));
+        return dataSource;
+    }
+
+    private static String env(String name, String defaultValue) {
+        return Optional.ofNullable(System.getenv(name)).orElse(defaultValue);
+    }
+}
