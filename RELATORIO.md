@@ -88,9 +88,9 @@ A complexidade ciclomática (CCN), o NLOC e a contagem de parâmetros foram medi
 | Credenciais e endereço do banco hardcoded (URL, usuário, senha) | 3 | 0 |
 | Recursos JDBC sem fechamento garantido | 3 | 0 |
 | Testes unitários automatizados | 0 | 42 |
-| Cobertura de linhas (JaCoCo), projeto inteiro | n/a | 72,5% (111/153) |
+| Cobertura de linhas (JaCoCo), projeto inteiro | n/a | 70,7% (111/157) |
 | Cobertura de linhas (JaCoCo), domínio, serviço e portas | n/a | 100% (98/98) |
-| Cobertura de ramos (JaCoCo), projeto inteiro | n/a | 100% (36/36) |
+| Cobertura de ramos (JaCoCo), projeto inteiro | n/a | 90,0% (36/40) |
 | Divergências de valor em relação ao legado (102.960 combinações) | n/a | 274, todas empates `x,xx5` |
 | Divergências de status da fatura em relação ao legado | n/a | 0 |
 | Infraestrutura externa exigida pelos testes | PostgreSQL + SMTP | nenhuma |
