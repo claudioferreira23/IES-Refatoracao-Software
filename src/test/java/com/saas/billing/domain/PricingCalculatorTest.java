@@ -6,7 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class PricingCalculatorTest {
 
@@ -15,23 +20,30 @@ class PricingCalculatorTest {
     private static final BigDecimal ONE_CENT = new BigDecimal("0.01");
     private static final BigDecimal TIE_TOLERANCE = new BigDecimal("0.000000001");
 
+    private static final String BASE_PRICE = "100.00";
+    private static final String COUPON_BLACKFRIDAY = "BLACKFRIDAY";
+    private static final String COUPON_WELCOME10 = "WELCOME10";
+
+    private static final String[] SWEEP_BASE_PRICES = {"0.99", "19.90", "49.99", "99.90", "149.00", "1000.00"};
+    private static final Integer[] SWEEP_MONTHS_ACTIVE = {0, 1, 2, 12, 13, 24, 25, 40};
+    private static final String[] SWEEP_PROMO_CODES = {null, "", "blackfriday", COUPON_WELCOME10, "XPTO"};
+    private static final Integer[] SWEEP_OVERDUE_DAYS = {0, 1, 15, 90};
+    private static final Boolean[] SWEEP_NON_PROFIT = {false, true};
+    private static final LocalDate[] SWEEP_TODAYS = {MARCH_15, NOVEMBER_20};
+    private static final int SWEEP_COMBINATIONS = 6 * 8 * 5 * 4 * 2 * 2;
+
     private final PricingCalculator calculator = new PricingCalculator();
 
-    @Test
-    void chargesBasePriceWhenNoRuleApplies() {
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15.minusMonths(6), 0, null, false, MARCH_15));
-    }
-
-    @Test
-    void appliesTenPercentLoyaltyDiscountAfterTwelveMonths() {
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15.minusMonths(12), 0, null, false, MARCH_15));
-        assertEquals(Money.of("90.00"), price("100.00", MARCH_15.minusMonths(13), 0, null, false, MARCH_15));
-        assertEquals(Money.of("90.00"), price("100.00", MARCH_15.minusMonths(24), 0, null, false, MARCH_15));
-    }
-
-    @Test
-    void appliesFifteenPercentLoyaltyDiscountAfterTwentyFourMonths() {
-        assertEquals(Money.of("85.00"), price("100.00", MARCH_15.minusMonths(25), 0, null, false, MARCH_15));
+    @ParameterizedTest(name = "{0} meses de casa: {1}")
+    @CsvSource({
+        "6,  100.00",
+        "12, 100.00",
+        "13, 90.00",
+        "24, 90.00",
+        "25, 85.00"
+    })
+    void appliesLoyaltyDiscountOnlyAfterTwelveAndTwentyFourMonths(int monthsActive, String expected) {
+        assertEquals(Money.of(expected), price(BASE_PRICE, MARCH_15.minusMonths(monthsActive), 0, null, false, MARCH_15));
     }
 
     @Test
@@ -39,57 +51,60 @@ class PricingCalculatorTest {
         LocalDate signup = LocalDate.of(2025, 2, 28);
         LocalDate today = LocalDate.of(2026, 3, 1);
 
-        assertEquals(Money.of("90.00"), price("100.00", signup, 0, null, false, today));
+        assertEquals(Money.of("90.00"), price(BASE_PRICE, signup, 0, null, false, today));
     }
 
-    @Test
-    void appliesThirtyPercentNonProfitDiscount() {
-        assertEquals(Money.of("70.00"), price("100.00", MARCH_15, 0, null, true, MARCH_15));
+    @ParameterizedTest(name = "ONG com {0} meses de casa: {1}")
+    @CsvSource({
+        "0,  70.00",
+        "30, 59.50"
+    })
+    void appliesThirtyPercentNonProfitDiscountOnTopOfLoyaltyDiscount(int monthsActive, String expected) {
+        assertEquals(Money.of(expected), price(BASE_PRICE, MARCH_15.minusMonths(monthsActive), 0, null, true, MARCH_15));
     }
 
-    @Test
-    void stacksNonProfitDiscountOnTopOfLoyaltyDiscount() {
-        assertEquals(Money.of("59.50"), price("100.00", MARCH_15.minusMonths(30), 0, null, true, MARCH_15));
+    @ParameterizedTest(name = "cupom {0} em {1}: {2}")
+    @CsvSource({
+        "BLACKFRIDAY, 2026-11-20, 70.00",
+        "BLACKFRIDAY, 2026-03-15, 100.00",
+        "blackFriday, 2026-11-20, 70.00"
+    })
+    void appliesBlackFridayOnlyInNovemberIgnoringCase(String promoCode, LocalDate today, String expected) {
+        assertEquals(Money.of(expected), price(BASE_PRICE, today, 0, promoCode, false, today));
     }
 
-    @Test
-    void appliesBlackFridayOnlyInNovember() {
-        assertEquals(Money.of("70.00"), price("100.00", NOVEMBER_20, 0, "BLACKFRIDAY", false, NOVEMBER_20));
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15, 0, "BLACKFRIDAY", false, MARCH_15));
+    @ParameterizedTest(name = "cupom {0} com {1} meses de casa: {2}")
+    @CsvSource({
+        "welcome10, 0, 90.00",
+        "WELCOME10, 1, 90.00",
+        "WELCOME10, 2, 100.00"
+    })
+    void appliesWelcomeDiscountOnlyUpToFirstMonthIgnoringCase(String promoCode, int monthsActive, String expected) {
+        assertEquals(Money.of(expected), price(BASE_PRICE, MARCH_15.minusMonths(monthsActive), 0, promoCode, false, MARCH_15));
     }
 
-    @Test
-    void matchesPromoCodesIgnoringCase() {
-        assertEquals(Money.of("70.00"), price("100.00", NOVEMBER_20, 0, "blackFriday", false, NOVEMBER_20));
-        assertEquals(Money.of("90.00"), price("100.00", MARCH_15, 0, "welcome10", false, MARCH_15));
+    @ParameterizedTest(name = "cupom ''{0}'' em {1}")
+    @CsvSource({
+        "XPTO,            2026-03-15",
+        "'   ',           2026-03-15",
+        "' BLACKFRIDAY ', 2026-11-20"
+    })
+    void ignoresUnknownBlankOrPaddedPromoCodes(String promoCode, LocalDate today) {
+        assertEquals(Money.of(BASE_PRICE), price(BASE_PRICE, today, 0, promoCode, false, today));
     }
 
-    @Test
-    void appliesWelcomeDiscountOnlyUpToFirstMonth() {
-        assertEquals(Money.of("90.00"), price("100.00", MARCH_15.minusMonths(1), 0, "WELCOME10", false, MARCH_15));
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15.minusMonths(2), 0, "WELCOME10", false, MARCH_15));
-    }
-
-    @Test
-    void ignoresUnknownBlankOrPaddedPromoCodes() {
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15, 0, "XPTO", false, MARCH_15));
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15, 0, "   ", false, MARCH_15));
-        assertEquals(Money.of("100.00"), price("100.00", NOVEMBER_20, 0, " BLACKFRIDAY ", false, NOVEMBER_20));
-    }
-
-    @Test
-    void addsLatePenaltyAndDailyInterestWhenOverdue() {
-        assertEquals(Money.of("103.00"), price("100.00", MARCH_15, 10, null, false, MARCH_15));
-    }
-
-    @Test
-    void ignoresNonPositiveOverdueDays() {
-        assertEquals(Money.of("100.00"), price("100.00", MARCH_15, -3, null, false, MARCH_15));
+    @ParameterizedTest(name = "{0} dias de atraso: {1}")
+    @CsvSource({
+        "10, 103.00",
+        "-3, 100.00"
+    })
+    void addsLatePenaltyAndDailyInterestOnlyWhenOverdue(int overdueDays, String expected) {
+        assertEquals(Money.of(expected), price(BASE_PRICE, MARCH_15, overdueDays, null, false, MARCH_15));
     }
 
     @Test
     void neverChargesNegativeAmount() {
-        assertEquals(Money.ZERO, price("20.00", NOVEMBER_20, 30, "BLACKFRIDAY", false, NOVEMBER_20));
+        assertEquals(Money.ZERO, price("20.00", NOVEMBER_20, 30, COUPON_BLACKFRIDAY, false, NOVEMBER_20));
     }
 
     @Test
@@ -99,35 +114,52 @@ class PricingCalculatorTest {
 
     @Test
     void matchesRoundedLegacyResultsExceptOnHalfCentTiesAcrossRuleCombinations() {
-        String[] basePrices = {"0.99", "19.90", "49.99", "99.90", "149.00", "1000.00"};
-        int[] monthsActive = {0, 1, 2, 12, 13, 24, 25, 40};
-        String[] promoCodes = {null, "", "blackfriday", "WELCOME10", "XPTO"};
-        int[] overdueDays = {0, 1, 15, 90};
-        LocalDate[] todays = {MARCH_15, NOVEMBER_20};
+        List<SweepCase> cases = sweepCases();
 
-        for (String base : basePrices) {
-            for (int months : monthsActive) {
-                for (String promo : promoCodes) {
-                    for (int overdue : overdueDays) {
-                        for (boolean nonProfit : new boolean[] {false, true}) {
-                            for (LocalDate today : todays) {
-                                LocalDate signup = today.minusMonths(months);
-                                double expected = legacyPrice(Double.parseDouble(base), signup, overdue, promo, nonProfit, today);
-                                Money actual = price(base, signup, overdue, promo, nonProfit, today);
-                                BigDecimal roundedLegacy = BigDecimal.valueOf(expected).setScale(2, RoundingMode.HALF_EVEN);
-                                BigDecimal difference = actual.amount().subtract(roundedLegacy).abs();
-                                boolean allowed = difference.signum() == 0
-                                        || (isHalfCentTie(expected) && difference.compareTo(ONE_CENT) <= 0);
-                                assertTrue(allowed,
-                                        () -> "base=" + base + " months=" + months + " promo=" + promo
-                                                + " overdue=" + overdue + " nonProfit=" + nonProfit
-                                                + " today=" + today + " expected=" + roundedLegacy + " actual=" + actual);
-                            }
-                        }
-                    }
-                }
-            }
+        assertEquals(SWEEP_COMBINATIONS, cases.size());
+        cases.forEach(this::assertMatchesRoundedLegacyResult);
+    }
+
+    private record SweepCase(String basePrice, int monthsActive, String promoCode, int overdueDays,
+                             boolean nonProfit, LocalDate today) {
+
+        LocalDate signupDate() {
+            return today.minusMonths(monthsActive);
         }
+    }
+
+    private static List<SweepCase> sweepCases() {
+        return Arrays.stream(SWEEP_BASE_PRICES)
+                .flatMap(base -> Arrays.stream(SWEEP_MONTHS_ACTIVE)
+                .flatMap(months -> Arrays.stream(SWEEP_PROMO_CODES)
+                .flatMap(promo -> Arrays.stream(SWEEP_OVERDUE_DAYS)
+                .flatMap(overdue -> Arrays.stream(SWEEP_NON_PROFIT)
+                .flatMap(nonProfit -> Stream.of(SWEEP_TODAYS)
+                .map(today -> new SweepCase(base, months, promo, overdue, nonProfit, today)))))))
+                .toList();
+    }
+
+    private void assertMatchesRoundedLegacyResult(SweepCase sweepCase) {
+        double legacy = legacyPrice(Double.parseDouble(sweepCase.basePrice()), sweepCase.signupDate(),
+                sweepCase.overdueDays(), sweepCase.promoCode(), sweepCase.nonProfit(), sweepCase.today());
+        Money actual = price(sweepCase.basePrice(), sweepCase.signupDate(), sweepCase.overdueDays(),
+                sweepCase.promoCode(), sweepCase.nonProfit(), sweepCase.today());
+        BigDecimal roundedLegacy = BigDecimal.valueOf(legacy).setScale(2, RoundingMode.HALF_EVEN);
+
+        assertTrue(isAcceptedDifference(actual, roundedLegacy, legacy),
+                () -> failureMessage(sweepCase, roundedLegacy, actual));
+    }
+
+    private static boolean isAcceptedDifference(Money actual, BigDecimal roundedLegacy, double legacy) {
+        BigDecimal difference = actual.amount().subtract(roundedLegacy).abs();
+        return difference.signum() == 0 || (isHalfCentTie(legacy) && difference.compareTo(ONE_CENT) <= 0);
+    }
+
+    private static String failureMessage(SweepCase sweepCase, BigDecimal roundedLegacy, Money actual) {
+        return "base=" + sweepCase.basePrice() + " months=" + sweepCase.monthsActive()
+                + " promo=" + sweepCase.promoCode() + " overdue=" + sweepCase.overdueDays()
+                + " nonProfit=" + sweepCase.nonProfit() + " today=" + sweepCase.today()
+                + " expected=" + roundedLegacy + " actual=" + actual;
     }
 
     private static boolean isHalfCentTie(double legacyValue) {
@@ -158,9 +190,9 @@ class PricingCalculatorTest {
             calculatedPrice = calculatedPrice * 0.70;
         }
         if (promoCode != null && !promoCode.trim().isEmpty()) {
-            if (promoCode.equalsIgnoreCase("BLACKFRIDAY") && today.getMonthValue() == 11) {
+            if (promoCode.equalsIgnoreCase(COUPON_BLACKFRIDAY) && today.getMonthValue() == 11) {
                 calculatedPrice = calculatedPrice - 30.0;
-            } else if (promoCode.equalsIgnoreCase("WELCOME10") && monthsActive <= 1) {
+            } else if (promoCode.equalsIgnoreCase(COUPON_WELCOME10) && monthsActive <= 1) {
                 calculatedPrice = calculatedPrice * 0.90;
             }
         }
