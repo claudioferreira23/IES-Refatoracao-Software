@@ -31,13 +31,21 @@ public final class BillingServiceFactory {
 
     private static DataSource postgresDataSource() {
         PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setUrl(env("BILLING_DB_URL", "jdbc:postgresql://localhost:5432/saas_db"));
-        dataSource.setUser(env("BILLING_DB_USER", "admin"));
+        dataSource.setUrl(requiredEnv("BILLING_DB_URL"));
+        dataSource.setUser(requiredEnv("BILLING_DB_USER"));
         dataSource.setPassword(env("BILLING_DB_PASSWORD", ""));
         return dataSource;
     }
 
     private static String env(String name, String defaultValue) {
         return Optional.ofNullable(System.getenv(name)).orElse(defaultValue);
+    }
+
+    private static String requiredEnv(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Variável de ambiente obrigatória não definida: " + name);
+        }
+        return value;
     }
 }

@@ -30,3 +30,6 @@ bin/
 # Sistema operacional
 .DS_Store
 Thumbs.db
+
+# Material da atividade (não versionado)
+atividade/

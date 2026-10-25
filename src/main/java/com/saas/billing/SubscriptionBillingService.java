@@ -7,6 +7,7 @@ import com.saas.billing.domain.InvoiceStatus;
 import com.saas.billing.domain.Money;
 import com.saas.billing.domain.PricingCalculator;
 import com.saas.billing.port.CustomerRepository;
+import com.saas.billing.port.InfrastructureException;
 import com.saas.billing.port.InvoiceRepository;
 import com.saas.billing.port.NotificationService;
 import com.saas.billing.port.PaymentGateway;
@@ -57,7 +58,15 @@ public class SubscriptionBillingService {
                 ? "Pagamento processado com sucesso: R$ " + amount
                 : "Falha no pagamento do cartão para: " + customer.id());
         invoiceRepository.save(new Invoice(customer.id(), amount, InvoiceStatus.fromPayment(approved)));
-        notificationService.sendInvoiceReceipt(customer.email(), amount);
-        logs.add("E-mail disparado para: " + customer.email());
+        logs.add(sendReceipt(customer.email(), amount));
+    }
+
+    private String sendReceipt(String email, Money amount) {
+        try {
+            notificationService.sendInvoiceReceipt(email, amount);
+            return "E-mail disparado para: " + email;
+        } catch (InfrastructureException e) {
+            return "Falha ao enviar recibo para: " + email;
+        }
     }
 }
