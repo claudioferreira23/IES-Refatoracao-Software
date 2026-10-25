@@ -11,15 +11,17 @@ import org.junit.jupiter.api.Test;
 
 class MoneyTest {
 
+    private static final String TEN_REAIS = "10.00";
+
     @Test
     void normalizesToTwoDecimalPlaces() {
-        assertEquals(new BigDecimal("10.00"), Money.of("10").amount());
-        assertEquals(Money.of("10.00"), Money.of("10"));
+        assertEquals(new BigDecimal(TEN_REAIS), Money.of("10").amount());
+        assertEquals(Money.of(TEN_REAIS), Money.of("10"));
     }
 
     @Test
     void roundsHalfEven() {
-        assertEquals(Money.of("10.00"), Money.of("10.005"));
+        assertEquals(Money.of(TEN_REAIS), Money.of("10.005"));
         assertEquals(Money.of("10.02"), Money.of("10.015"));
     }
 
