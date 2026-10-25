@@ -11,9 +11,18 @@ public class RecordingNotificationService implements NotificationService {
     }
 
     private final List<SentReceipt> sent = new ArrayList<>();
+    private RuntimeException failure;
+
+    public RecordingNotificationService failOnSend(RuntimeException failure) {
+        this.failure = failure;
+        return this;
+    }
 
     @Override
     public void sendInvoiceReceipt(String email, Money amount) {
+        if (failure != null) {
+            throw failure;
+        }
         sent.add(new SentReceipt(email, amount));
     }
 

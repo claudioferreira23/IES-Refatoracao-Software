@@ -117,6 +117,36 @@ class SubscriptionBillingServiceTest {
         assertTrue(invoices.invoices().isEmpty());
     }
 
+    @Test
+    void keepsPaidInvoiceAndLogsWhenReceiptCannotBeSent() {
+        notifications.failOnSend(new InfrastructureException("smtp fora do ar", new RuntimeException()));
+        RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
+
+        List<String> logs = service(gateway, MARCH_CLOCK).processMonthlyBilling(command("cus_1", null));
+
+        assertEquals(List.of(
+                "Pagamento processado com sucesso: R$ 100.00",
+                "Falha ao enviar recibo para: cliente@exemplo.com"), logs);
+        assertEquals(List.of(Money.of("100.00")), gateway.charges());
+        assertEquals(List.of(new Invoice("cus_1", Money.of("100.00"), InvoiceStatus.PAID)), invoices.invoices());
+        assertTrue(notifications.sent().isEmpty());
+    }
+
+    @Test
+    void propagatesInvoiceStorageFailureAfterCharging() {
+        InfrastructureException failure = new InfrastructureException("falha ao gravar fatura", new RuntimeException());
+        invoices.failOnSave(failure);
+        RecordingPaymentGateway gateway = RecordingPaymentGateway.approving();
+        SubscriptionBillingService service = service(gateway, MARCH_CLOCK);
+
+        InfrastructureException thrown =
+                assertThrows(InfrastructureException.class, () -> service.processMonthlyBilling(command("cus_1", null)));
+
+        assertSame(failure, thrown);
+        assertEquals(List.of(Money.of("100.00")), gateway.charges());
+        assertTrue(notifications.sent().isEmpty());
+    }
+
     private SubscriptionBillingService service(RecordingPaymentGateway gateway, Clock clock) {
         return new SubscriptionBillingService(customers, invoices, gateway, notifications, new PricingCalculator(), clock);
     }
