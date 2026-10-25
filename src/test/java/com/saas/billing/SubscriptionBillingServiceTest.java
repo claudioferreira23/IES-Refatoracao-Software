@@ -11,6 +11,7 @@ import com.saas.billing.domain.CustomerStatus;
 import com.saas.billing.domain.Invoice;
 import com.saas.billing.domain.InvoiceStatus;
 import com.saas.billing.domain.Money;
+import com.saas.billing.domain.PricingCalculator;
 import com.saas.billing.port.InfrastructureException;
 import com.saas.billing.support.InMemoryCustomerRepository;
 import com.saas.billing.support.InMemoryInvoiceRepository;
@@ -107,7 +108,7 @@ class SubscriptionBillingServiceTest {
                 customerId -> {
                     throw failure;
                 },
-                invoices, RecordingPaymentGateway.approving(), notifications, MARCH_CLOCK);
+                invoices, RecordingPaymentGateway.approving(), notifications, new PricingCalculator(), MARCH_CLOCK);
 
         InfrastructureException thrown =
                 assertThrows(InfrastructureException.class, () -> service.processMonthlyBilling(command("cus_1", null)));
@@ -117,7 +118,7 @@ class SubscriptionBillingServiceTest {
     }
 
     private SubscriptionBillingService service(RecordingPaymentGateway gateway, Clock clock) {
-        return new SubscriptionBillingService(customers, invoices, gateway, notifications, clock);
+        return new SubscriptionBillingService(customers, invoices, gateway, notifications, new PricingCalculator(), clock);
     }
 
     private static BillingCommand command(String customerId, String promoCode) {

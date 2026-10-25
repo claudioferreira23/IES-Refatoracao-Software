@@ -4,6 +4,7 @@ import com.saas.billing.adapter.JdbcCustomerRepository;
 import com.saas.billing.adapter.JdbcInvoiceRepository;
 import com.saas.billing.adapter.SmtpNotificationService;
 import com.saas.billing.adapter.TokenValidatingPaymentGateway;
+import com.saas.billing.domain.PricingCalculator;
 import java.time.Clock;
 import java.util.Optional;
 import javax.sql.DataSource;
@@ -24,6 +25,7 @@ public final class BillingServiceFactory {
                         env("BILLING_SMTP_HOST", "smtp.empresa.com"),
                         Integer.parseInt(env("BILLING_SMTP_PORT", "587")),
                         env("BILLING_SMTP_FROM", "billing@empresa.com")),
+                new PricingCalculator(),
                 Clock.systemDefaultZone());
     }
 
