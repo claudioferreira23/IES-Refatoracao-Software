@@ -24,6 +24,9 @@ public class SmtpNotificationService implements NotificationService {
 
     @Override
     public void sendInvoiceReceipt(String email, Money amount) {
+        if (email == null || email.isBlank()) {
+            throw new InfrastructureException("E-mail do cliente ausente: recibo não enviado", null);
+        }
         try {
             SimpleEmail message = new SimpleEmail();
             message.setHostName(host);
