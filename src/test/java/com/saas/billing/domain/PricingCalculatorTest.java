@@ -3,6 +3,8 @@ package com.saas.billing.domain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +12,8 @@ class PricingCalculatorTest {
 
     private static final LocalDate MARCH_15 = LocalDate.of(2026, 3, 15);
     private static final LocalDate NOVEMBER_20 = LocalDate.of(2026, 11, 20);
+    private static final BigDecimal ONE_CENT = new BigDecimal("0.01");
+    private static final BigDecimal TIE_TOLERANCE = new BigDecimal("0.000000001");
 
     private final PricingCalculator calculator = new PricingCalculator();
 
@@ -89,7 +93,12 @@ class PricingCalculatorTest {
     }
 
     @Test
-    void keepsLegacyResultsWithinOneCentAcrossRuleCombinations() {
+    void roundsOnlyTheFinalAmountLikeTheLegacyFormula() {
+        assertEquals(Money.of("23.43"), price("19.90", MARCH_15.minusMonths(25), 365, null, false, MARCH_15));
+    }
+
+    @Test
+    void matchesRoundedLegacyResultsExceptOnHalfCentTiesAcrossRuleCombinations() {
         String[] basePrices = {"0.99", "19.90", "49.99", "99.90", "149.00", "1000.00"};
         int[] monthsActive = {0, 1, 2, 12, 13, 24, 25, 40};
         String[] promoCodes = {null, "", "blackfriday", "WELCOME10", "XPTO"};
@@ -105,17 +114,27 @@ class PricingCalculatorTest {
                                 LocalDate signup = today.minusMonths(months);
                                 double expected = legacyPrice(Double.parseDouble(base), signup, overdue, promo, nonProfit, today);
                                 Money actual = price(base, signup, overdue, promo, nonProfit, today);
-                                double difference = Math.abs(actual.amount().doubleValue() - expected);
-                                assertTrue(difference <= 0.01,
+                                BigDecimal roundedLegacy = BigDecimal.valueOf(expected).setScale(2, RoundingMode.HALF_EVEN);
+                                BigDecimal difference = actual.amount().subtract(roundedLegacy).abs();
+                                boolean allowed = difference.signum() == 0
+                                        || (isHalfCentTie(expected) && difference.compareTo(ONE_CENT) <= 0);
+                                assertTrue(allowed,
                                         () -> "base=" + base + " months=" + months + " promo=" + promo
                                                 + " overdue=" + overdue + " nonProfit=" + nonProfit
-                                                + " today=" + today + " expected=" + expected + " actual=" + actual);
+                                                + " today=" + today + " expected=" + roundedLegacy + " actual=" + actual);
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    private static boolean isHalfCentTie(double legacyValue) {
+        BigDecimal value = BigDecimal.valueOf(legacyValue);
+        BigDecimal thousandths = value.setScale(3, RoundingMode.HALF_EVEN);
+        return value.subtract(thousandths).abs().compareTo(TIE_TOLERANCE) <= 0
+                && thousandths.unscaledValue().abs().intValue() % 10 == 5;
     }
 
     private Money price(String basePrice, LocalDate signupDate, int overdueDays, String promoCode,
